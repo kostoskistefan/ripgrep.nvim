@@ -1,87 +1,94 @@
 local M = {}
 
-local function delete_ripgrep_directories(directory)
-  local entries = vim.fn.readdir(directory)
-
-  for _, entry in ipairs(entries) do
-    local full_path = directory .. '/' .. entry
-    if vim.fn.isdirectory(full_path) == 1 and entry:find("^ripgrep") then
-      vim.fn.delete(full_path, "rf")
-    end
-  end
-end
-
-local function get_current_directory()
-  local info = debug.getinfo(1, "S")
-  local path = info.source
-  if path:sub(1,1) == "@" then
-    path = path:sub(2)
-  end
-  return path:match("(.*/)")
-end
-
 function M.install_rg()
+  -- Define supported targets for each OS and architecture
+  local supported_os_architecture_targets = {
+    Windows_NT = {
+      i686      = 'i686-pc-windows-msvc',
+      x86_64    = 'x86_64-pc-windows-msvc',
+    },
+    Darwin = {
+      x86_64    = 'x86_64-apple-darwin',
+      aarch64   = 'aarch64-apple-darwin',
+    },
+    Linux = {
+      i686      = 'i686-unknown-linux-gnu',
+      s390x     = 's390x-unknown-linux-gnu',
+      x86_64    = 'x86_64-unknown-linux-musl',
+      aarch64   = 'aarch64-unknown-linux-gnu',
+      powerpc64 = 'powerpc64-unknown-linux-gnu',
+      armv7     = 'armv7-unknown-linux-musleabi',
+      armv7l    = 'armv7-unknown-linux-musleabi',
+      armv7h    = 'armv7-unknown-linux-musleabihf',
+    },
+    OpenBSD = {
+      i686      = 'i686-unknown-linux-gnu',
+      s390x     = 's390x-unknown-linux-gnu',
+      x86_64    = 'x86_64-unknown-linux-musl',
+      aarch64   = 'aarch64-unknown-linux-gnu',
+      powerpc64 = 'powerpc64-unknown-linux-gnu',
+      armv7     = 'armv7-unknown-linux-musleabi',
+      armv7l    = 'armv7-unknown-linux-musleabi',
+      armv7h    = 'armv7-unknown-linux-musleabihf',
+    },
+  }
+
+  -- Get the current OS, architecture and corresponding target
+  local os = vim.loop.os_uname().sysname
+  local architecture = vim.loop.os_uname().machine
+  local target = supported_os_architecture_targets[os][architecture]
+
+  if not target then
+    error(string.format('Unsupported architecture for %s: %s', os, architecture))
+  end
+
+  -- Find the latest ripgrep version from the rg_version file
+  -- which is updated through GitHub actions to the latest version
+  local ripgrep_version = vim.fn.readfile(vim.fn.expand('%:p:h:h') .. '/rg_version')[1]
+
+  if not ripgrep_version then
+    error('Failed to read the latest ripgrep version.')
+  end
+
+  -- Create a ripgrep.nvim directory inside the nvim-data directory to store the ripgrep executable
   local data_path = vim.fn.stdpath('data') .. '/ripgrep.nvim'
+
   if vim.fn.isdirectory(data_path) == 0 then
     vim.fn.mkdir(data_path, 'p')
   end
 
-  local current_directory = get_current_directory()
-  local rg_version = vim.fn.readfile(current_directory .. '../rg_version')[1]
-  local os_type = vim.loop.os_uname().sysname
-  local arch_type = vim.loop.os_uname().machine
-  local url, extract_cmd
+  local ripgrep_filename = string.format('ripgrep-%s-%s', ripgrep_version, target)
+  local base_url = 'https://github.com/BurntSushi/ripgrep/releases/download/' .. ripgrep_version .. '/'
 
-  local base_url = "https://github.com/BurntSushi/ripgrep/releases/download/" .. rg_version .. "/ripgrep-" .. rg_version
+  local archive_extension = (os == 'Windows_NT' and 'zip' or 'tar.gz')
+  local archive_path = string.format('%s/rg.%s', data_path, archive_extension)
+  local url = string.format('%s/%s.%s', base_url, ripgrep_filename, archive_extension)
 
-  if os_type == "Windows_NT" then
-    if arch_type == "x86_64" then
-      url = base_url .. "-x86_64-pc-windows-msvc.zip"
-      extract_cmd = "powershell.exe -command Expand-Archive -Path " .. data_path .. "\\rg.zip -DestinationPath " .. data_path
-    elseif arch_type == "i686" then
-      url = base_url .. "-i686-pc-windows-msvc.zip"
-      extract_cmd = "powershell.exe -command Expand-Archive -Path " .. data_path .. "\\rg.zip -DestinationPath " .. data_path
-    else
-      error("Unsupported architecture for Windows")
-    end
-  elseif os_type == "Darwin" then
-    if arch_type == "x86_64" then
-      url = base_url .. "-x86_64-apple-darwin.tar.gz"
-    elseif arch_type == "aarch64" then
-      url = base_url .. "-aarch64-apple-darwin.tar.gz"
-    else
-      error("Unsupported architecture for MacOS")
-    end
-    extract_cmd = "tar -xzf " .. data_path .. "/rg.tar.gz -C " .. data_path
+  local commands
+
+  -- Set the commands to download and install ripgrep
+  if os == 'Windows_NT' then
+    commands = {
+      string.format('powershell.exe -command "Invoke-WebRequest %s -OutFile %s"', url, archive_path),
+      string.format('powershell.exe -command "Expand-Archive -Path %s -DestinationPath %s"', archive_path, data_path),
+      string.format('powershell.exe -command "mv %s/%s/rg.exe %s/rg.exe"', data_path, ripgrep_filename, data_path),
+      string.format('powershell.exe -command "rm %s"', archive_path),
+      string.format('powershell.exe -command "rm %s/%s -Recurse -Force"', data_path, ripgrep_filename),
+    }
   else
-    if arch_type == "x86_64" or arch_type == "i686" then
-      local libc = "musl"
-      url = base_url .. "-" .. arch_type .. "-unknown-linux-" .. libc .. ".tar.gz"
-    elseif arch_type == "armv7" then
-      url = base_url .. "-armv7-unknown-linux-musleabi.tar.gz"
-    elseif arch_type == "armv7l" then
-      url = base_url .. "-armv7-unknown-linux-musleabi.tar.gz"
-    elseif arch_type == "armv7h" then
-      url = base_url .. "-armv7-unknown-linux-musleabihf.tar.gz"
-    elseif arch_type == "aarch64" then
-      url = base_url .. "-aarch64-unknown-linux-gnu.tar.gz"
-    elseif arch_type == "powerpc64" then
-      url = base_url .. "-powerpc64-unknown-linux-gnu.tar.gz"
-    elseif arch_type == "s390x" then
-      url = base_url .. "-s390x-unknown-linux-gnu.tar.gz"
-    else
-      error("Unsupported architecture for Linux")
-    end
-    extract_cmd = "tar -xzf " .. data_path .. "/rg.tar.gz -C " .. data_path
+    commands = {
+      string.format('curl -L %s -o %s', url, archive_path),
+      string.format('tar -xzf %s -C %s', archive_path, data_path),
+      string.format('mv %s/%s/rg %s/rg', data_path, ripgrep_filename, data_path),
+      string.format('rm %s', archive_path),
+      string.format('rm %s/%s', data_path, ripgrep_filename),
+    }
   end
 
-  delete_ripgrep_directories(data_path)
-  vim.fn.system("curl -L " .. url .. " -o " .. data_path .. "/rg.tar.gz")
-  vim.fn.system(extract_cmd)
-  vim.fn.system("mv " .. data_path .. "/*/rg" .. " " .. data_path .. "/rg")
-  vim.fn.system("rm " .. data_path .. "/rg.tar.gz")
-  delete_ripgrep_directories(data_path)
+  -- Execute the commands sequentially
+  for _, command in ipairs(commands) do
+    vim.fn.system(command)
+  end
 end
 
 return M
-
