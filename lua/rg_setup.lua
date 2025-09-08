@@ -44,7 +44,7 @@ function M.install_rg()
 
   -- Find the latest ripgrep version from the rg_version file
   -- which is updated through GitHub actions to the latest version
-  local ripgrep_version = vim.fn.readfile(vim.fn.expand('%:p:h:h') .. '/rg_version')[1]
+  local ripgrep_version = vim.fn.readfile(debug.getinfo(1).source:match("@?(.*/).-/") .. 'rg_version')[1]
 
   if not ripgrep_version then
     error('Failed to read the latest ripgrep version.')
